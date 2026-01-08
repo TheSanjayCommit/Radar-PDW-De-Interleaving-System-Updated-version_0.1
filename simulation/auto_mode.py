@@ -72,20 +72,45 @@ def auto_mode_ui():
     # -----------------------------
     st.subheader("Parameter Ranges")
 
-    f_min = st.number_input("Frequency Min (MHz)", 500.0, 40000.0, cfg.get("f_min", 8000.0))
-    f_max = st.number_input("Frequency Max (MHz)", 500.0, 40000.0, cfg.get("f_max", 12000.0))
+    saved_f_min = cfg.get("f_min", 8000.0)
+    f_min = st.number_input("Frequency Min (MHz)", 500.0, 40000.0, float(saved_f_min))
+    cfg["f_min"] = f_min
 
-    pri_min = st.number_input("PRI Min (µs)", 2.0, 20000.0, cfg.get("pri_min", 2000.0))
-    pri_max = st.number_input("PRI Max (µs)", 2.0, 20000.0, cfg.get("pri_max", 6000.0))
+    saved_f_max = cfg.get("f_max", 12000.0)
+    f_max = st.number_input("Frequency Max (MHz)", 500.0, 40000.0, float(saved_f_max))
+    cfg["f_max"] = f_max
 
-    pw_min = st.number_input("Pulse Width Min (µs)", 0.01, 1000.0, cfg.get("pw_min", 10.0))
-    pw_max = st.number_input("Pulse Width Max (µs)", 0.01, 1000.0, cfg.get("pw_max", 50.0))
+    saved_pri_min = cfg.get("pri_min", 2000.0)
+    pri_min = st.number_input("PRI Min (µs)", 2.0, 20000.0, float(saved_pri_min))
+    cfg["pri_min"] = pri_min
 
-    amp_min = st.number_input("Amplitude Min (dB)", -200.0, 10.0, cfg.get("amp_min", -80.0))
-    amp_max = st.number_input("Amplitude Max (dB)", -200.0, 10.0, cfg.get("amp_max", -30.0))
+    saved_pri_max = cfg.get("pri_max", 6000.0)
+    pri_max = st.number_input("PRI Max (µs)", 2.0, 20000.0, float(saved_pri_max))
+    cfg["pri_max"] = pri_max
 
-    doa_min = st.number_input("DOA Min (deg)", 0.0, 360.0, cfg.get("doa_min", 0.0))
-    doa_max = st.number_input("DOA Max (deg)", 0.0, 360.0, cfg.get("doa_max", 360.0))
+    saved_pw_min = cfg.get("pw_min", 10.0)
+    pw_min = st.number_input("Pulse Width Min (µs)", 0.01, 1000.0, float(saved_pw_min))
+    cfg["pw_min"] = pw_min
+
+    saved_pw_max = cfg.get("pw_max", 50.0)
+    pw_max = st.number_input("Pulse Width Max (µs)", 0.01, 1000.0, float(saved_pw_max))
+    cfg["pw_max"] = pw_max
+
+    saved_amp_min = cfg.get("amp_min", -80.0)
+    amp_min = st.number_input("Amplitude Min (dB)", -200.0, 10.0, float(saved_amp_min))
+    cfg["amp_min"] = amp_min
+
+    saved_amp_max = cfg.get("amp_max", -30.0)
+    amp_max = st.number_input("Amplitude Max (dB)", -200.0, 10.0, float(saved_amp_max))
+    cfg["amp_max"] = amp_max
+
+    saved_doa_min = cfg.get("doa_min", 0.0)
+    doa_min = st.number_input("DOA Min (deg)", 0.0, 360.0, float(saved_doa_min))
+    cfg["doa_min"] = doa_min
+
+    saved_doa_max = cfg.get("doa_max", 360.0)
+    doa_max = st.number_input("DOA Max (deg)", 0.0, 360.0, float(saved_doa_max))
+    cfg["doa_max"] = doa_max
 
     # -----------------------------
     # SIMULATION CONTROL

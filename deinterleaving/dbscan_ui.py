@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
+from reports.report_gen import generate_pdf_report
 
 # Try importing HDBSCAN
 try:
@@ -35,15 +36,26 @@ def dbscan_ui():
     # =================================================
     # DATA SOURCE
     # =================================================
+    # =================================================
+    # DATA SOURCE
+    # =================================================
     last_mode = st.session_state.get("last_active_mode", "Auto")
     default_idx = 0 if last_mode == "Auto" else 1
+    
+    # Load persisted index if available, else usage default
+    saved_ds_idx = state.get("data_source_idx", default_idx)
+    
+    data_source_opts = ["Auto Mode (Live)", "Manual Mode (Live)"]
+    if saved_ds_idx >= len(data_source_opts): saved_ds_idx = 0
 
     data_source = st.radio(
         "Data Source",
-        ["Auto Mode (Live)", "Manual Mode (Live)"],
-        index=default_idx,
+        data_source_opts,
+        index=saved_ds_idx,
         horizontal=True
     )
+    # Save selection
+    state["data_source_idx"] = data_source_opts.index(data_source)
 
     df_input = None
     known_emitters = None
@@ -120,7 +132,12 @@ def dbscan_ui():
     if HAS_HDBSCAN:
         algo_options.append("HDBSCAN")
 
-    algorithm = st.selectbox("Clustering Algorithm", algo_options)
+    # Load persisted algo index
+    saved_algo_idx = state.get("algo_idx", 0)
+    if saved_algo_idx >= len(algo_options): saved_algo_idx = 0
+
+    algorithm = st.selectbox("Clustering Algorithm", algo_options, index=saved_algo_idx)
+    state["algo_idx"] = algo_options.index(algorithm)
 
     params = {}
 
@@ -164,8 +181,13 @@ def dbscan_ui():
     # HDBSCAN PARAMS
     # =================================================
     elif algorithm == "HDBSCAN":
-        params["min_cluster_size"] = st.slider("Min Cluster Size", 2, 50, 5)
-        params["min_samples"] = st.slider("Min Samples", 1, 50, 5)
+        saved_min_cluster = state.get("hdbscan_min_cluster", 5)
+        params["min_cluster_size"] = st.slider("Min Cluster Size", 2, 50, saved_min_cluster)
+        state["hdbscan_min_cluster"] = params["min_cluster_size"]
+
+        saved_min_samples = state.get("hdbscan_min_samples", 5)
+        params["min_samples"] = st.slider("Min Samples", 1, 50, saved_min_samples)
+        state["hdbscan_min_samples"] = params["min_samples"]
 
     # =================================================
     # RUN DE-INTERLEAVING
@@ -217,6 +239,15 @@ def dbscan_ui():
             """
         )
 
+        st.caption("Download Report")
+        pdf_bytes = generate_pdf_report(df_out, summ)
+        st.download_button(
+            label="📄 Download Mission Report (PDF)",
+            data=pdf_bytes,
+            file_name="mission_report.pdf",
+            mime="application/pdf"
+        )
+
         st.divider()
         st.subheader("📊 PDW De-Interleaving View")
 
@@ -243,6 +274,7 @@ def dbscan_ui():
                 .round(2)
                 .reset_index()
             )
+
             st.dataframe(df_emitters, height=420, use_container_width=True)
             st.caption("Emitter-wise de-interleaving result")
 
@@ -254,7 +286,11 @@ def dbscan_ui():
             if not emitter_ids:
                 st.warning("No emitters detected.")
             else:
-                selected_emitter = st.selectbox("Select Emitter ID", emitter_ids)
+                saved_emitter_idx = state.get("selected_emitter_idx", 0)
+                if saved_emitter_idx >= len(emitter_ids): saved_emitter_idx = 0
+                
+                selected_emitter = st.selectbox("Select Emitter ID", emitter_ids, index=saved_emitter_idx)
+                state["selected_emitter_idx"] = emitter_ids.index(selected_emitter)
                 df_track = (
                     df_out[df_out["Emitter_ID"] == selected_emitter]
                     .sort_values("toa_us")

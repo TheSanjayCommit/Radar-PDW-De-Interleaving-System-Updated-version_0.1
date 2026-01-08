@@ -52,101 +52,136 @@ def manual_mode_ui():
         # -----------------------------
         # FREQUENCY CONFIG
         # -----------------------------
+        # Load from config or default
+        saved_freq_type = cfg.get(f"freq_type_{i}", "Fixed")
+        freq_opts = ["Fixed", "Agile"]
+        try:
+            f_idx = freq_opts.index(saved_freq_type)
+        except:
+            f_idx = 0
+
         freq_type = st.selectbox(
             "Frequency Type",
-            ["Fixed", "Agile"],
-            key=f"freq_type_{i}"
+            freq_opts,
+            index=f_idx,
+            key=f"widget_freq_type_{i}"
         )
+        cfg[f"freq_type_{i}"] = freq_type  # SAVE
 
         freqs = []
         if freq_type == "Agile":
+            saved_modes = cfg.get(f"num_modes_{i}", 3)
             num_modes = st.number_input(
                 "Number of Frequency Modes",
                 min_value=2,
-                max_value=8,      # ✅ LIMITED TO 8
-                value=3,
-                key=f"num_modes_{i}"
+                max_value=8,
+                value=saved_modes,
+                key=f"widget_num_modes_{i}"
             )
+            cfg[f"num_modes_{i}"] = num_modes # SAVE
+
             for m in range(num_modes):
-                freqs.append(
-                    st.number_input(
-                        f"Mode {m+1} Frequency (MHz)",
-                        500.0, 40000.0,
-                        9000.0 + m * 50,
-                        key=f"freq_{i}_{m}"
-                    )
-                )
-        else:
-            freqs.append(
-                st.number_input(
-                    "Base Frequency (MHz)",
+                saved_f = cfg.get(f"freq_{i}_{m}", 9000.0 + m * 50)
+                val = st.number_input(
+                    f"Mode {m+1} Frequency (MHz)",
                     500.0, 40000.0,
-                    9000.0,
-                    key=f"freq_{i}"
+                    float(saved_f),
+                    key=f"widget_freq_{i}_{m}"
                 )
+                cfg[f"freq_{i}_{m}"] = val # SAVE
+                freqs.append(val)
+        else:
+            saved_f = cfg.get(f"freq_{i}", 9000.0)
+            val = st.number_input(
+                "Base Frequency (MHz)",
+                500.0, 40000.0,
+                float(saved_f),
+                key=f"widget_freq_{i}"
             )
+            cfg[f"freq_{i}"] = val # SAVE
+            freqs.append(val)
 
         # -----------------------------
         # PRI CONFIG
         # -----------------------------
+        saved_pri_type = cfg.get(f"pri_type_{i}", "Fixed")
+        pri_opts = ["Fixed", "Jittered", "Staggered"]
+        try:
+            p_idx = pri_opts.index(saved_pri_type)
+        except:
+            p_idx = 0
+
         pri_type = st.selectbox(
             "PRI Type",
-            ["Fixed", "Jittered", "Staggered"],
-            key=f"pri_type_{i}"
+            pri_opts,
+            index=p_idx,
+            key=f"widget_pri_type_{i}"
         )
+        cfg[f"pri_type_{i}"] = pri_type # SAVE
 
         pri_values = []
 
         if pri_type == "Staggered":
+            saved_n_pri = cfg.get(f"num_pri_{i}", 2)
             num_pri = st.number_input(
                 "Number of PRI Values",
                 min_value=2,
-                max_value=5,      # ✅ LIMITED TO 5
-                value=2,
-                key=f"num_pri_{i}"
+                max_value=5,
+                value=saved_n_pri,
+                key=f"widget_num_pri_{i}"
             )
+            cfg[f"num_pri_{i}"] = num_pri # SAVE
+
             for p in range(num_pri):
-                pri_values.append(
-                    st.number_input(
-                        f"PRI {p+1} (µs)",
-                        2.0, 20000.0,
-                        2000.0 + p * 500,
-                        key=f"pri_{i}_{p}"
-                    )
-                )
-        else:
-            pri_values.append(
-                st.number_input(
-                    "Base PRI (µs)",
+                saved_p = cfg.get(f"pri_{i}_{p}", 2000.0 + p * 500)
+                val = st.number_input(
+                    f"PRI {p+1} (µs)",
                     2.0, 20000.0,
-                    2000.0,
-                    key=f"pri_{i}"
+                    float(saved_p),
+                    key=f"widget_pri_{i}_{p}"
                 )
+                cfg[f"pri_{i}_{p}"] = val # SAVE
+                pri_values.append(val)
+        else:
+            saved_pri = cfg.get(f"pri_{i}", 2000.0)
+            val = st.number_input(
+                "Base PRI (µs)",
+                2.0, 20000.0,
+                float(saved_pri),
+                key=f"widget_pri_{i}"
             )
+            cfg[f"pri_{i}"] = val # SAVE
+            pri_values.append(val)
 
         # -----------------------------
         # OTHER PARAMETERS
         # -----------------------------
+        saved_pw = cfg.get(f"pw_{i}", 10.0)
         pw = st.number_input(
             "Pulse Width (µs)",
             0.01, 1000.0,
-            10.0,
-            key=f"pw_{i}"
+            float(saved_pw),
+            key=f"widget_pw_{i}"
         )
+        cfg[f"pw_{i}"] = pw # SAVE
 
+        saved_amp = cfg.get(f"amp_{i}", -60.0)
         amp = st.number_input(
             "Amplitude (dB)",
             -200.0, 10.0,
-            -60.0,
-            key=f"amp_{i}"
+            float(saved_amp),
+            key=f"widget_amp_{i}"
         )
+        cfg[f"amp_{i}"] = amp # SAVE
 
+        saved_doa = cfg.get(f"doa_{i}", 90.0)
         doa = st.number_input(
             "DOA (deg)",
             0.0, 360.0,
-            90.0,
-            key=f"doa_{i}"
+            float(saved_doa),
+            key=f"widget_doa_{i}"
         )
+        cfg[f"doa_{i}"] = doa # SAVE
 
         emitters.append({
             "freqs": freqs,
