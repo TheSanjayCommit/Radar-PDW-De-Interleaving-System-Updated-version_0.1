@@ -4,6 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
+
 def get_current_time_us():
     now = datetime.now()
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -150,7 +151,17 @@ def auto_mode_ui():
     # -----------------------------
     if st.session_state.auto_running:
 
-        # 1. Check if we have active emitters. If not, generate them.
+        # 1. Check if we have active emitters. 
+        #    Regenerate if N or Distribution percentages have changed.
+        current_config_sig = (num_emitters, fixed_pct, agile_pct, stagger_pct)
+        
+        saved_sig = st.session_state.get("active_emitters_sig")
+        
+        if "active_emitters" in st.session_state:
+            # If config changed or count mismatch, clear state
+            if saved_sig != current_config_sig:
+                del st.session_state.active_emitters
+
         if "active_emitters" not in st.session_state:
             st.session_state.active_emitters = generate_emitters_config(
                 num_emitters,
@@ -159,6 +170,8 @@ def auto_mode_ui():
                 pw_min, pw_max, amp_min, amp_max,
                 doa_min, doa_max
             )
+            # Save the signature of the current generation
+            st.session_state.active_emitters_sig = current_config_sig
             # print(f"Generated {len(st.session_state.active_emitters)} new emitters.")
 
         # 2. Generate PDWs using the ACTIVE emitters (reusing them)
@@ -180,6 +193,8 @@ def auto_mode_ui():
         st.dataframe(df_all.tail(20))
 
 
+
+
 # =================================================
 # EMITTER GENERATION (PERSISTABLE)
 # =================================================
@@ -190,7 +205,7 @@ def generate_emitters_config(num_emitters,
                              doa_min, doa_max):
     """
     Generates a list of emitter configurations.
-    This is called ONCE at the start of a simulation sequence.
+    Called ONCE at the start of a simulation sequence.
     """
     emitters = []
 
@@ -203,39 +218,61 @@ def generate_emitters_config(num_emitters,
         ["agile"] * n_agile +
         ["stagger"] * n_stagger
     )
+    # Fill remaining if rounding errors
+    while len(emitter_types) < num_emitters:
+        emitter_types.append("fixed")
+        
     np.random.shuffle(emitter_types)
 
-    # 1. Generate base frequencies evenly spaced
-    base_freqs = np.linspace(f_min, f_max, num_emitters + 2)[1:-1] # avoid edges
+    # Distribute base parameters
+    base_freqs = np.linspace(f_min, f_max, num_emitters + 2)[1:-1]
     np.random.shuffle(base_freqs)
     
-    # 2. Generate base PRIs evenly spaced
     base_pris = np.linspace(pri_min, pri_max, num_emitters + 2)[1:-1]
     np.random.shuffle(base_pris)
 
     for i, etype in enumerate(emitter_types):
         
-        # Base parameters
-        base_freq = base_freqs[i] + np.random.uniform(-50, 50) 
-        base_pri  = base_pris[i]  + np.random.uniform(-100, 100)
+        base_freq = base_freqs[i] + np.random.uniform(-20, 20) 
+        base_pri  = base_pris[i]  + np.random.uniform(-50, 50)
         
         base_pw   = np.random.uniform(pw_min, pw_max)
         base_amp  = np.random.uniform(amp_min, amp_max)
         base_doa  = np.random.uniform(doa_min, doa_max)
 
+        # Config based on Type
+        # Agile: Random selection from 3-5 modes
         freq_modes = [base_freq]
-        pri_modes = [base_pri]
-
-        # Start offset logic needs to be handled per-generation window or 
-        # relative to start. For simplicity, we just store base params here.
+        if etype == "agile":
+            n_modes = np.random.randint(3, 6)
+            # Spread modes around base (Reduced to +/- 50 MHz to ensure separability)
+            offsets = np.linspace(-50, 50, n_modes)
+            freq_modes = [base_freq + o for o in offsets]
         
+        # Staggered: Sequence of 3-5 PRI steps
+        pri_modes = [base_pri]
+        if etype == "stagger":
+            n_steps = np.random.randint(3, 6)
+            # Spread sequence around base (Reduced to 5% to ensure separability)
+            start_offset = 0.05 * base_pri
+            offsets = np.linspace(-start_offset, start_offset, n_steps)
+            pri_modes = [base_pri + o for o in offsets]
+
+        # Initial State Tracking
+        # Random start within first PRI interval to desynchronize
+        next_toa = st.session_state.global_time_us + np.random.uniform(0, max(pri_modes)*2)
+
         emitters.append({
+            "id": i + 1,
             "type": etype,
             "freq_modes": freq_modes,
             "pri_modes": pri_modes,
             "pw": base_pw,
             "amp": base_amp,
-            "doa": base_doa
+            "doa": base_doa,
+            # Mutable State
+            "next_toa": next_toa,
+            "pulse_idx": 0
         })
         
     return emitters
@@ -243,52 +280,62 @@ def generate_emitters_config(num_emitters,
 
 def generate_pdws_from_emitters(emitters, pulses_per_emitter):
     """
-    Generates PDWs for a 2-second window using existing emitter configs.
+    Generates PDWs for a 2-second window using strict time continuity.
     """
     rows = []
 
     window_start = st.session_state.global_time_us
-    window_end = window_start + 2e6
+    window_end = window_start + 2e6 # 2 seconds
     st.session_state.global_time_us = window_end
 
-    for emitter in emitters:
+    for em in emitters:
         
-        # Unpack emitter params
-        freq_modes = emitter["freq_modes"]
-        pri_modes = emitter["pri_modes"]
-        base_pw = emitter["pw"]
-        base_amp = emitter["amp"]
-        base_doa = emitter["doa"]
+        # Exact Pulse Count Generation
+        for _ in range(pulses_per_emitter):
+            
+            # --- 1. Parameter Selection based on Type ---
+            
+            # FREQUENCY
+            if em["type"] == "agile":
+                # Pick random from modes
+                f_center = np.random.choice(em["freq_modes"])
+            else:
+                f_center = em["freq_modes"][0]
+            
+            # Add small noise (jitter) to Frequency irrespective of type
+            freq = f_center + np.random.normal(0, 0.5) 
 
-        # Calculate TOAs within this window
-        # We need to maintain phase/timing continuity ideally, but for now
-        # random start offset within the window is acceptable as long as PRI is consistent.
-        # Ideally, we should track 'next_toa' for each emitter.
-        # But for this simple simulation, random offset in the new window is OK,
-        # provided it's consistent *enough* for clustering.
-        
-        start_offset = np.random.uniform(0, pri_modes[0]) 
-        toa = window_start + start_offset
+            # PRI (Determines NEXT TOA)
+            if em["type"] == "stagger":
+                # Cyclic walk through modes
+                idx = em["pulse_idx"] % len(em["pri_modes"])
+                p_center = em["pri_modes"][idx]
+            else:
+                p_center = em["pri_modes"][0]
 
-        for k in range(pulses_per_emitter):
+            # Add jitter to PRI (Simulate real hardware noise)
+            # 1-3% jitter is common
+            pri_jitter = np.random.normal(0, 0.01 * p_center)
+            pri = p_center + pri_jitter
+            
+            # OTHER PARAMS (Noise added)
+            pw  = em["pw"] + np.random.normal(0, 0.05)
+            amp = em["amp"] + np.random.normal(0, 0.5)
+            doa = em["doa"] + np.random.normal(0, 0.2)
 
-            freq = freq_modes[k % len(freq_modes)] 
-            pri  = pri_modes[k % len(pri_modes)]   
-
+            # --- 2. Store Pulse ---
             rows.append({
                 "freq_MHz": freq,
                 "pri_us": pri,
-                "pw_us": base_pw,
-                "doa_deg": base_doa,
-                "amp_dB": base_amp,
-                "toa_us": toa
+                "pw_us": pw,
+                "doa_deg": doa,
+                "amp_dB": amp,
+                "toa_us": em["next_toa"],
+                "Emitter_ID": em["id"] # Ground Truth for validation
             })
-            
-            # Simple TOA increment.
-            # Note: This doesn't strictly adhere to the continuous timeline 
-            # from the previous block (phase continuity), but it generates
-            # the correct number of pulses with the correct parameters
-            # effectively simulating "active" emitters in this window.
-            toa += pri # Increment TOA for next pulse in this burst
+
+            # --- 3. Update State ---
+            em["next_toa"] += pri
+            em["pulse_idx"] += 1
 
     return pd.DataFrame(rows)

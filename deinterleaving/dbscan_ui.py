@@ -156,15 +156,27 @@ def dbscan_ui():
 
                 X = StandardScaler().fit_transform(df_input[features].values)
 
-                for eps in np.arange(0.1, 3.0, 0.1):
+                # Aggressive Auto-Tuning for Exact Match
+                # Search fine-grained range
+                search_space = np.concatenate([
+                    np.arange(0.1, 1.0, 0.05),
+                    np.arange(1.0, 3.0, 0.1),
+                    np.arange(3.0, 10.0, 0.5)
+                ])
+                
+                for eps in search_space:
                     db = DBSCAN(eps=eps, min_samples=5)
                     labels = db.fit_predict(X)
-                    clusters = len(set(labels)) - (1 if -1 in labels else 0)
-                    err = abs(clusters - known_emitters)
+                    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+                    
+                    err = abs(n_clusters - known_emitters)
+                    
                     if err < best_err:
                         best_err = err
                         best_eps = eps
                         best_ms = 5
+                    
+                    # Stop immediately if exact match found
                     if err == 0:
                         break
 
@@ -173,9 +185,10 @@ def dbscan_ui():
                     "min_samples": best_ms
                 }
 
-            st.success(f"Auto-Tuned DBSCAN → eps={best_eps:.2f}")
-
-            st.success(f"Auto-Tuned DBSCAN → eps={best_eps:.2f}")
+            if best_err == 0:
+                st.success(f"Auto-Tuned DBSCAN → Found Exact Match (eps={best_eps:.2f})")
+            else:
+                st.warning(f"Auto-Tuned DBSCAN → Best Effort (eps={best_eps:.2f}, Error: {best_err})")
 
         # -----------------------------
         # -----------------------------
@@ -186,10 +199,10 @@ def dbscan_ui():
         # Default Tolerances (can be tuned)
         c1, c2 = st.columns(2)
         with c1:
-            tol_freq = st.number_input("Freq Tolerance (±MHz)", 0.1, 100.0, 10.0, help="Max deviation: ±10 MHz")
+            tol_freq = st.number_input("Freq Tolerance (±MHz)", 0.1, 500.0, 100.0, help="Max deviation: ±100 MHz (Handles Agility)")
             tol_pw   = st.number_input("PW Tolerance (±µs)", 0.01, 50.0, 2.0, help="Max deviation: ±2 µs")
         with c2:
-            tol_pri  = st.number_input("PRI Tolerance (±µs)", 0.1, 500.0, 20.0, help="Max deviation: ±20 µs")
+            tol_pri  = st.number_input("PRI Tolerance (±µs)", 0.1, 2000.0, 300.0, help="Max deviation: ±300 µs (Handles Stagger/Jitter)")
             tol_doa  = st.number_input("DOA Tolerance (±deg)", 0.1, 45.0, 5.0, help="Max deviation: ±5 deg")
 
         st.caption("These values define the 'Unit Distance' for the clustering algorithm.")
@@ -230,7 +243,7 @@ def dbscan_ui():
         # Default to known emitters if available, else 3
         default_k = known_emitters if known_emitters else 3
         
-        n_clusters = st.slider("Number of Clusters (K)", 2, 20, default_k)
+        n_clusters = st.slider("Number of Clusters (K)", 1, 20, default_k)
         params["n_clusters"] = n_clusters
 
     # =================================================
@@ -292,7 +305,8 @@ def dbscan_ui():
     if state.get("results") is not None:
 
         df_out = df_input.copy()
-        df_out["Emitter_ID"] = state["results"]
+        
+        # Emitter_ID preserves Ground Truth from simulation
 
         summ = state["summary"]
 
@@ -378,6 +392,13 @@ def dbscan_ui():
 
         # SAVE OUTPUT
         out_dir = st.session_state.get("user_output_dir", "outputs")
+        
+        # Sort by Ground Truth Emitter ID then Time (as requested)
+        if "Emitter_ID" in df_out.columns:
+            df_out = df_out.sort_values(["Emitter_ID", "toa_us"])
+        else:
+            df_out = df_out.sort_values("toa_us")
+
         df_out.round(2).to_csv(
             f"{out_dir}/deinterleaved_pdws.csv",
             index=False

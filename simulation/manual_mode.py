@@ -4,6 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
+
 def get_current_time_us():
     now = datetime.now()
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -135,7 +136,7 @@ def manual_mode_ui():
             cfg[f"num_pri_{i}"] = num_pri # SAVE
 
             for p in range(num_pri):
-                saved_p = cfg.get(f"pri_{i}_{p}", 2000.0 + p * 500)
+                saved_p = cfg.get(f"pri_{i}_{p}", 2000.0 + p * 100)
                 val = st.number_input(
                     f"PRI {p+1} (µs)",
                     2.0, 20000.0,
@@ -213,6 +214,8 @@ def manual_mode_ui():
             st.session_state.manual_running = False
             st.session_state.manual_global_time_us = get_current_time_us()
             st.session_state.manual_pdw_buffer = []
+            if "manual_emitter_states" in st.session_state:
+                del st.session_state.manual_emitter_states
             # Clear config to force re-load of staggered defaults
             st.session_state.manual_config.clear()
             st.rerun()
@@ -221,6 +224,36 @@ def manual_mode_ui():
     # GENERATE PDWs
     # =================================================
     if st.session_state.manual_running:
+        
+        # 1. State Invalidation Logic (Match Auto Mode)
+        # Create a signature of the current configuration
+        # We include num_emitters and the pulses count, plus a hash of the emitter params
+        import json
+        try:
+            # Simple serialization of cfg dict to string for signature
+            # sort_keys=True ensures key order doesn't affect hash
+            cfg_sig = json.dumps(cfg, sort_keys=True)
+        except:
+            cfg_sig = str(cfg)
+
+        last_sig = st.session_state.get("manual_cfg_sig")
+
+        if last_sig != cfg_sig:
+            # Config changed! Reset buffer to ensure "Detected = Expected"
+            st.session_state.manual_pdw_buffer = []
+            if "manual_emitter_states" in st.session_state:
+                del st.session_state.manual_emitter_states
+            
+            st.session_state.manual_cfg_sig = cfg_sig
+            st.toast("Configuration changed. Data buffer cleared for consistency.", icon="🧹")
+            # Reset global time if you want a true "Fresh Start" from 0? 
+            # Or keep time moving? Usually for verification, Time=0 is nicer.
+            # Let's reset time too.
+            st.session_state.manual_global_time_us = 0 
+
+        # Initialize state tracker if needed
+        if "manual_emitter_states" not in st.session_state:
+            st.session_state.manual_emitter_states = {}
 
         rows = []
 
@@ -228,34 +261,69 @@ def manual_mode_ui():
         window_end = window_start + 2e6
         st.session_state.manual_global_time_us = window_end
 
-        for e in emitters:
+        for i, e in enumerate(emitters):
+            
+            # Retrieve or Init State
+            if i not in st.session_state.manual_emitter_states:
+                # Random start offset
+                start_offset = np.random.uniform(0, max(e["pri_values"]))
+                st.session_state.manual_emitter_states[i] = {
+                    "next_toa": window_start + start_offset,
+                    "pulse_idx": 0
+                }
+            
+            state = st.session_state.manual_emitter_states[i]
+            
+            # Exact Pulse Count Generation
+            for _ in range(pulses_per_emitter):
+                
+                # --- 1. Parameter Selection ---
+                
+                # FREQUENCY
+                if e["freqs"] and len(e["freqs"]) > 1:
+                     # Agile: Random choice
+                    f_center = np.random.choice(e["freqs"])
+                else:
+                    f_center = e["freqs"][0]
+                
+                freq = f_center + np.random.normal(0, 0.5)
 
-            # Start TOA near the beginning of the window to ensure pulses fit
-            start_offset = np.random.uniform(0, e["pri_values"][0])
-            toa = window_start + start_offset
+                # PRI
+                if e["pri_type"] == "Staggered":
+                    idx = state["pulse_idx"] % len(e["pri_values"])
+                    p_center = e["pri_values"][idx]
+                else:
+                    p_center = e["pri_values"][0]
 
-            for k in range(pulses_per_emitter):
-
-                # FORCE SINGLE MODE AGILITY/STAGGER FOR 1-TO-1 DETECTION
-                freq = e["freqs"][0] # Always use first freq
-                pri  = e["pri_values"][0] # Always use first PRI
-
-
+                # Jitter
                 if e["pri_type"] == "Jittered":
-                    # If Emitter ITSELF is jittered, add EXTRA jitter
-                    pri = pri + np.random.normal(0, 0.05 * pri)
+                    # Larger Jitter
+                    pri_jitter = np.random.normal(0, 0.05 * p_center)
+                else:
+                    # Small hardware jitter
+                    pri_jitter = np.random.normal(0, 0.01 * p_center)
+                
+                pri = p_center + pri_jitter
+                
+                # Other Params
+                pw  = e["pw"] + np.random.normal(0, 0.05)
+                amp = e["amp"] + np.random.normal(0, 0.5)
+                doa = e["doa"] + np.random.normal(0, 0.2)
 
+                # --- 2. Store Pulse ---
                 rows.append({
                     "freq_MHz": freq,
-                    "pri_us": pri, # Fixed jitter on PRI
-                    "pw_us": e["pw"],
-                    "doa_deg": e["doa"],
-                    "amp_dB": e["amp"],
-                    "toa_us": toa
+                    "pri_us": pri,
+                    "pw_us": pw,
+                    "doa_deg": doa,
+                    "amp_dB": amp,
+                    "toa_us": state["next_toa"],
+                    "Emitter_ID": i + 1
                 })
 
-                # if toa > window_end:
-                #    break
+                # --- 3. Update State ---
+                state["next_toa"] += pri
+                state["pulse_idx"] += 1
 
         out_dir = st.session_state.get("user_output_dir", OUTPUT_DIR)
         st.session_state.manual_pdw_buffer.extend(rows)
@@ -270,3 +338,5 @@ def manual_mode_ui():
             
         st.success(f"Generated 2 seconds of PDWs (Total: {len(df_all)})")
         st.dataframe(df_all.tail(20))
+
+

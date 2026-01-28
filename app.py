@@ -7,14 +7,6 @@ from simulation.auto_mode import auto_mode_ui
 from simulation.manual_mode import manual_mode_ui
 from deinterleaving.dbscan_ui import dbscan_ui
 
-import streamlit as st
-import pandas as pd
-import os
-import auth
-
-from simulation.auto_mode import auto_mode_ui
-from simulation.manual_mode import manual_mode_ui
-
 # -------------------------------------------------
 # APP CONFIG
 # -------------------------------------------------
@@ -189,6 +181,8 @@ def dashboard():
 
     elif page == "De-Interleaving":
         dbscan_ui()
+
+
     
     elif page == "My Files":
         st.title("📂 My Data History")

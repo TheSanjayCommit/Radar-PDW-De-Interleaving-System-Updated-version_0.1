@@ -1,5 +1,5 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN, KMeans
 
@@ -17,63 +17,75 @@ except ImportError:
         HAS_HDBSCAN = False
         HDBSCAN_LIB = None
 
-def run_clustering(df, algo, params, features, custom_tols=None):
+def auto_tune_dbscan(df, features, known_emitters):
     """
-    Runs the selected clustering algorithm on the provided DataFrame.
-    
-    Args:
-        df: Input DataFrame
-        algo: "DBSCAN", "HDBSCAN", or "K-Means"
-        params: Dictionary of algorithm parameters
-        features: List of feature columns to use
-        custom_tols: Dictionary of tolerances for DBSCAN custom scaling
-        
-    Returns:
-        labels: Array of cluster labels
+    Iteratively finds the best Epsilon for DBSCAN to match known_emitters.
     """
-    
-    if df is None or df.empty:
-        return []
+    X = StandardScaler().fit_transform(df[features].values)
+    best_err = float("inf")
+    best_eps = 0.5
+    best_ms = 5
 
-    # -----------------------
-    # DBSCAN (Custom Scaling)
-    # -----------------------
-    if algo == "DBSCAN":
+    for eps in np.arange(0.1, 3.0, 0.1):
+        db = DBSCAN(eps=eps, min_samples=5)
+        labels = db.fit_predict(X)
+        clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        err = abs(clusters - known_emitters)
+        if err < best_err:
+            best_err = err
+            best_eps = eps
+            best_ms = 5
+        if err == 0:
+            break
+            
+    return {"eps": float(best_eps), "min_samples": best_ms}
+
+
+def run_clustering(algorithm, df, features, params, custom_tols=None):
+    """
+    Executes the selected clustering algorithm and returns labels.
+    """
+    labels = []
+    
+    if algorithm == "DBSCAN":
         # Apply Custom Scaling based on Tolerances
-        # Formula: Value / Tolerance. 
         X_custom = df[features].copy()
-        tols = custom_tols if custom_tols else {}
         
         for col in features:
-            if col in tols:
-                    X_custom[col] = X_custom[col] / tols[col]
+            if custom_tols and col in custom_tols:
+                 X_custom[col] = X_custom[col] / custom_tols[col]
         
-        # Use the custom scaled X
         X_final = X_custom.fillna(0).values
         labels = DBSCAN(**params).fit_predict(X_final)
 
-    # -----------------------
-    # HDBSCAN
-    # -----------------------
-    elif algo == "HDBSCAN":
+    elif algorithm == "HDBSCAN":
         X = StandardScaler().fit_transform(df[features].values)
-        
         if HDBSCAN_LIB == "sklearn":
             labels = HDBSCAN(**params).fit_predict(X)
-        elif HDBSCAN_LIB == "hdbscan":
-            labels = hdbscan.HDBSCAN(**params).fit_predict(X)
         else:
-            # Fallback if selected but not available (shouldn't happen via UI)
-            labels = np.zeros(len(df))
+            labels = hdbscan.HDBSCAN(**params).fit_predict(X)
 
-    # -----------------------
-    # K-MEANS
-    # -----------------------
-    elif algo == "K-Means":
+    elif algorithm == "K-Means":
         X = StandardScaler().fit_transform(df[features].values)
         labels = KMeans(**params, random_state=42, n_init=10).fit_predict(X)
-        
-    else:
-        labels = np.zeros(len(df))
 
     return labels
+
+
+def process_results(labels, known_emitters):
+    """
+    Maps raw labels to 1-indexed Emitter IDs and generates summary stats.
+    """
+    unique = sorted(set(labels))
+    label_map = {l: i + 1 for i, l in enumerate(unique) if l != -1}
+    label_map[-1] = 0
+
+    mapped_labels = [label_map[l] for l in labels]
+    
+    summary = {
+        "clusters": len(set(mapped_labels)) - (1 if 0 in mapped_labels else 0),
+        "noise": mapped_labels.count(0),
+        "expected": known_emitters
+    }
+    
+    return mapped_labels, summary

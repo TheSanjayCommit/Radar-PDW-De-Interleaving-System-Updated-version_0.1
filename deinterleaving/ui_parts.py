@@ -1,175 +1,158 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from deinterleaving.logic import HAS_HDBSCAN
-from reports.report_gen import generate_pdf_report
+from .logic import auto_tune_dbscan, run_clustering, process_results, HAS_HDBSCAN
 
-def render_settings(state_key_prefix="auto", known_emitters=None):
+def render_deinterleaving_section(df_input, known_emitters, key_prefix="auto"):
     """
-    Renders the De-Interleaving settings (Algo, Tolerances) and returns the configuration.
+    Renders the complete De-Interleaving UI section.
     """
-    st.subheader("De-Interleaving Configuration")
-    
-    with st.expander("Algorithm & Tolerances", expanded=True):
-        
-        # 1. Feature Selection
-        # st.caption("Feature Selection")
-        # Defaults
-        saved_feats = st.session_state.get(f"{state_key_prefix}_features", ["freq_MHz", "pri_us"])
-        
-        c1, c2, c3, c4 = st.columns(4)
-        use_freq = c1.checkbox("Frequency", value="freq_MHz" in saved_feats, key=f"{state_key_prefix}_use_freq")
-        use_pri  = c2.checkbox("PRI", value="pri_us" in saved_feats, key=f"{state_key_prefix}_use_pri")
-        use_pw   = c3.checkbox("PW", value="pw_us" in saved_feats, key=f"{state_key_prefix}_use_pw")
-        use_doa  = c4.checkbox("DOA", value="doa_deg" in saved_feats, key=f"{state_key_prefix}_use_doa")
+    st.markdown("---")
+    st.header("🔍 De-Interleaving & Analysis")
+    st.caption("Apply clustering algorithms to separate the interleaved signal stream below.")
 
-        features = []
-        if use_freq: features.append("freq_MHz")
-        if use_pri:  features.append("pri_us")
-        if use_pw:   features.append("pw_us") # Assumes column existence check done before execution
-        if use_doa:  features.append("doa_deg")
-        
-        st.session_state[f"{state_key_prefix}_features"] = features
-
-        st.divider()
-
-        # 2. Algo Selection
-        algo_options = ["DBSCAN"]
-        if HAS_HDBSCAN:
-            algo_options.append("HDBSCAN")
-        algo_options.append("K-Means")
-
-        saved_algo_idx = st.session_state.get(f"{state_key_prefix}_algo_idx", 0)
-        if saved_algo_idx >= len(algo_options): saved_algo_idx = 0
-
-        algorithm = st.selectbox("Clustering Algorithm", algo_options, index=saved_algo_idx, key=f"{state_key_prefix}_algo_select")
-        st.session_state[f"{state_key_prefix}_algo_idx"] = algo_options.index(algorithm)
-
-        params = {}
-        custom_tols = {}
-
-        # 3. Parameters
-        if algorithm == "DBSCAN":
-            st.caption("Clustering Tolerances (PDW Units)")
-            c1, c2 = st.columns(2)
-            with c1:
-                tol_freq = st.number_input("Freq Tolerance (±MHz)", 0.1, 100.0, 10.0, key=f"{state_key_prefix}_tol_freq")
-                tol_pw   = st.number_input("PW Tolerance (±µs)", 0.01, 50.0, 2.0, key=f"{state_key_prefix}_tol_pw")
-            with c2:
-                tol_pri  = st.number_input("PRI Tolerance (±µs)", 0.1, 500.0, 20.0, key=f"{state_key_prefix}_tol_pri")
-                tol_doa  = st.number_input("DOA Tolerance (±deg)", 0.1, 45.0, 5.0, key=f"{state_key_prefix}_tol_doa")
-
-            custom_tols = {
-                "freq_MHz": tol_freq,
-                "pri_us": tol_pri,
-                "pw_us": tol_pw,
-                "doa_deg": tol_doa
-            }
-
-            eps_mult = st.slider("Cluster Tightness (Multiplier)", 0.1, 2.0, 1.0, 0.1, key=f"{state_key_prefix}_eps")
-            min_samples = st.slider("Min Pulses per Cluster", 2, 20, 5, 1, key=f"{state_key_prefix}_min_samples")
-            
-            params["eps"] = eps_mult
-            params["min_samples"] = min_samples
-
-        elif algorithm == "HDBSCAN":
-            min_cluster = st.slider("Min Cluster Size", 2, 50, 5, key=f"{state_key_prefix}_h_min_cluster")
-            min_samples = st.slider("Min Samples", 1, 50, 5, key=f"{state_key_prefix}_h_min_samples")
-            params["min_cluster_size"] = min_cluster
-            params["min_samples"] = min_samples
-            
-        elif algorithm == "K-Means":
-            default_k = known_emitters if known_emitters else 3
-            n_clusters = st.slider("Number of Clusters (K)", 2, 20, default_k, key=f"{state_key_prefix}_k_clusters")
-            params["n_clusters"] = n_clusters
-
-        return {
-            "algorithm": algorithm,
-            "features": features,
-            "params": params,
-            "custom_tols": custom_tols
-        }
-
-def render_results(df_input, labels, summary, custom_tols, params):
-    """
-    Renders the results dashboard (tables and PDF download).
-    """
-    if df_input is None or labels is None:
+    if df_input is None or df_input.empty:
+        st.warning("No PDW data available to analyze.")
         return
 
-    df_out = df_input.copy()
-    df_out["Emitter_ID"] = labels
+    # 1. Feature Selection
+    features = render_feature_selection(df_input, key_prefix)
+    if not features:
+        st.error("Select at least one feature.")
+        return
 
-    summ = summary
+    # 2. Algorithm & Parameters
+    algorithm, params, custom_tols = render_algo_selection(known_emitters, df_input, features, key_prefix)
+
+    # 3. Run Button
+    if st.button(f"🚀 Run {algorithm}", key=f"{key_prefix}_run_btn", type="primary"):
+        with st.spinner(f"Running {algorithm}..."):
+            labels = run_clustering(algorithm, df_input, features, params, custom_tols)
+            mapped_results, summary = process_results(labels, known_emitters)
+            
+            # Save results to session state to persist view
+            st.session_state[f"{key_prefix}_results"] = mapped_results
+            st.session_state[f"{key_prefix}_summary"] = summary
+            
+            st.toast(f"De-Interleaving Complete! Detected {summary['clusters']} Emitters.", icon="✅")
+
+    # 4. Results Display
+    if f"{key_prefix}_results" in st.session_state:
+        results = st.session_state[f"{key_prefix}_results"]
+        summary = st.session_state[f"{key_prefix}_summary"]
+        render_results_view(df_input, results, summary, key_prefix)
+
+
+def render_feature_selection(df, key_prefix):
+    st.subheader("1. Feature Selection")
     
-    st.success("De-Interleaving Completed")
+    # Default features
+    default_feats = ["freq_MHz", "pri_us"]
+    
+    c1, c2, c3, c4 = st.columns(4)
+    use_freq = c1.checkbox("Frequency", value="freq_MHz" in default_feats, key=f"{key_prefix}_f")
+    use_pri  = c2.checkbox("PRI", value="pri_us" in default_feats, key=f"{key_prefix}_p")
+    use_pw   = c3.checkbox("PW", value=False, key=f"{key_prefix}_w")
+    use_doa  = c4.checkbox("DOA", value=False, key=f"{key_prefix}_d")
 
-    st.markdown(
-        f"""
-        ### ✅ De-Interleaving Summary
-        - **Detected Emitters:** {summ['clusters']}
-        - **Expected Emitters:** {summ.get('expected', 'Unknown')}
-        - **Unassigned Pulses:** {summ['noise']}
-        """
-    )
-    # Display tolerances if available
-    if custom_tols:
-        st.caption(f"Freq Tol: ±{custom_tols.get('freq_MHz')} MHz | PRI Tol: ±{custom_tols.get('pri_us')} µs")
+    features = []
+    if use_freq: features.append("freq_MHz")
+    if use_pri:  features.append("pri_us")
+    if use_pw and "pw_us" in df.columns: features.append("pw_us")
+    if use_doa and "doa_deg" in df.columns: features.append("doa_deg")
+    
+    return features
 
-    st.caption("Download Report")
-    pdf_bytes = generate_pdf_report(df_out, summ)
-    st.download_button(
-        label="📄 Download Mission Report (PDF)",
-        data=pdf_bytes,
-        file_name="mission_report.pdf",
-        mime="application/pdf"
-    )
 
-    st.divider()
-    st.subheader("📊 PDW De-Interleaving View")
+def render_algo_selection(known_emitters, df, features, key_prefix):
+    st.subheader("2. Algorithm Configuration")
+    
+    algo_options = ["DBSCAN"]
+    if HAS_HDBSCAN: algo_options.append("HDBSCAN")
+    algo_options.append("K-Means")
 
-    col1, col2, col3 = st.columns([1.3, 1.1, 1.2])
+    c_algo, c_params = st.columns([1, 2])
+    
+    with c_algo:
+        algorithm = st.selectbox("Algorithm", algo_options, key=f"{key_prefix}_algo")
 
-    # WINDOW 1 — INTERLEAVED PDWs
-    with col1:
-        st.markdown("### 🔀 Interleaved PDWs")
-        df_interleaved = df_input.sort_values("toa_us").round(2)
-        cols = ["freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
-        st.dataframe(df_interleaved[cols], height=420, use_container_width=True)
+    params = {}
+    custom_tols = {}
 
-    # WINDOW 2 — DE-INTERLEAVED EMITTER SUMMARY
-    with col2:
-        st.markdown("### 🎯 Detected Emitters")
+    with c_params:
+        if algorithm == "DBSCAN":
+            # Auto-Tune option
+            if st.checkbox("✨ Auto-Tune Epsilon", value=True, help="Automatically find best Epsilon matching expected emitters.", key=f"{key_prefix}_autotune"):
+                 with st.spinner("Auto-tuning..."):
+                     tuned = auto_tune_dbscan(df, features, known_emitters)
+                     params["eps"] = tuned["eps"]
+                     params["min_samples"] = tuned["min_samples"]
+                     st.caption(f"Auto-Tuned: eps={tuned['eps']:.2f}")
+            else:
+                 params["eps"] = st.slider("Epsilon (Radius)", 0.1, 5.0, 0.5, key=f"{key_prefix}_eps")
+                 params["min_samples"] = st.slider("Min Samples", 2, 20, 5, key=f"{key_prefix}_ms")
+
+            # Tolerances for Custom Scaling
+            with st.expander("🛠️ Advanced Tolerances", expanded=False):
+                c1, c2 = st.columns(2)
+                custom_tols["freq_MHz"] = c1.number_input("Freq Tol (MHz)", 0.1, 100.0, 10.0, key=f"{key_prefix}_tol_f")
+                custom_tols["pri_us"] = c2.number_input("PRI Tol (µs)", 0.1, 500.0, 20.0, key=f"{key_prefix}_tol_p")
+                
+        elif algorithm == "HDBSCAN":
+            params["min_cluster_size"] = st.slider("Min Cluster Size", 2, 50, 5, key=f"{key_prefix}_h_mcs")
+            params["min_samples"] = st.slider("Min Samples", 1, 50, 5, key=f"{key_prefix}_h_ms")
+
+        elif algorithm == "K-Means":
+             default_k = known_emitters if known_emitters else 3
+             params["n_clusters"] = st.slider("Number of Clusters (k)", 2, 20, default_k, key=f"{key_prefix}_k")
+
+    return algorithm, params, custom_tols
+
+
+def render_results_view(df_input, results, summary, key_prefix):
+    
+    df_out = df_input.copy()
+    df_out["Emitter_ID"] = results
+    
+    # Save to CSV immediately
+    out_dir = st.session_state.get("user_output_dir", "outputs")
+    df_out.round(2).to_csv(f"{out_dir}/deinterleaved_pdws.csv", index=False)
+
+    st.markdown("### 📊 De-Interleaving Results")
+    
+    # Metrics Area
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Detected Emitters", summary['clusters'], border=True)
+    m2.metric("Expected Emitters", summary.get('expected', 'N/A'), border=True)
+    m3.metric("Noise Pulses", summary['noise'], border=True)
+
+    # 3-Panel View
+    t1, t2, t3 = st.tabs(["🔀 Interleaved Input", "🎯 Detected Emitters", "📡 Emitter Tracks"])
+    
+    with t1:
+        cols = ["toa_us", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+        st.dataframe(df_out[cols].sort_values("toa_us").round(2), use_container_width=True, height=400)
+        
+    with t2:
         df_emitters = (
-            df_out[df_out["Emitter_ID"] != 0]
-            .groupby("Emitter_ID")
-            .agg(
-                Pulses=("Emitter_ID", "count"),
-                Mean_Freq_MHz=("freq_MHz", "mean"),
-                Mean_PRI_us=("pri_us", "mean")
-            )
-            .round(2)
-            .reset_index()
-        )
-        st.dataframe(df_emitters, height=420, use_container_width=True)
-
-    # WINDOW 3 — EMITTER TRACKING
-    with col3:
-        st.markdown("### 📡 Emitter Tracking")
-        emitter_ids = df_emitters["Emitter_ID"].tolist()
-
-        if not emitter_ids:
-            st.warning("No emitters detected.")
-        else:
-            selected_emitter = st.selectbox("Select Emitter ID", emitter_ids)
-            df_track = (
-                df_out[df_out["Emitter_ID"] == selected_emitter]
-                .sort_values("toa_us")
+                df_out[df_out["Emitter_ID"] != 0]
+                .groupby("Emitter_ID")
+                .agg(
+                    Pulses=("Emitter_ID", "count"),
+                    Mean_Freq_MHz=("freq_MHz", "mean"),
+                    Mean_PRI_us=("pri_us", "mean")
+                )
                 .round(2)
+                .reset_index()
             )
-            st.write(f"**Emitter {selected_emitter} — Pulses: {len(df_track)}**")
-            st.dataframe(
-                df_track[["freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]],
-                height=360,
-                use_container_width=True
-            )
+        st.dataframe(df_emitters, use_container_width=True)
+        
+    with t3:
+        emitter_ids = sorted(list(set(results)))
+        if 0 in emitter_ids: emitter_ids.remove(0)
+        
+        if not emitter_ids:
+            st.info("No emitters found.")
+        else:
+            sel_id = st.selectbox("Select Emitter to Track", emitter_ids, key=f"{key_prefix}_track_sel")
+            track_df = df_out[df_out["Emitter_ID"] == sel_id].sort_values("toa_us")
+            st.dataframe(track_df, use_container_width=True)
